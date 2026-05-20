@@ -16,7 +16,7 @@ import PromiseKit
 
 let statusItemLengthWithSpeed: CGFloat = 72
 
-private let MetaCoreMd5 = "WOSHIZIDONGSHENGCHENGDEA"
+private let MetaCoreMd5 = "8f6cf68ed1a1090f13beb069909e9ea8"
 
 @main
 class AppDelegate: NSObject, NSApplicationDelegate {
