@@ -1,0 +1,70 @@
+name: Sync upstream meta
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream-meta
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check release token
+        env:
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
+        run: test -n "$RELEASE_PAT"
+
+      - name: Checkout meta
+        uses: actions/checkout@v4
+        with:
+          ref: meta
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/MetaCubeX/ClashX.Meta.git
+          git fetch upstream +refs/heads/meta:refs/remotes/upstream/meta --no-tags
+
+      - name: Detect upstream changes
+        id: detect
+        run: |
+          if git merge-base --is-ancestor upstream/meta HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream meta
+        if: steps.detect.outputs.changed == 'true'
+        run: |
+          git merge --no-edit upstream/meta
+          git push origin HEAD:meta
+
+      - name: Create release tag
+        if: steps.detect.outputs.changed == 'true'
+        run: |
+          git fetch origin --tags
+          latest="$(git tag -l 'v1.0.*' --sort=-v:refname | head -n1)"
+          if [ -z "$latest" ]; then
+            next="v1.0.0"
+          else
+            patch="${latest##*.}"
+            next="v1.0.$((patch + 1))"
+          fi
+
+          git tag -a "$next" -m "$next"
+          git push origin "$next"
