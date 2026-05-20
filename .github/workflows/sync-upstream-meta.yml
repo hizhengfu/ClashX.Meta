@@ -57,13 +57,16 @@ jobs:
       - name: Create release tag
         if: steps.detect.outputs.changed == 'true'
         run: |
-          git fetch origin --tags
-          latest="$(git tag -l 'v1.0.*' --sort=-v:refname | head -n1)"
-          if [ -z "$latest" ]; then
-            next="v1.0.0"
-          else
-            patch="${latest##*.}"
-            next="v1.0.$((patch + 1))"
+          upstream_latest="$(git ls-remote --tags --refs upstream 'v*' | awk '{print $2}' | sed 's#refs/tags/##' | sort -V | tail -n1)"
+          if [ -z "$upstream_latest" ]; then
+            echo "No upstream version tag found; skipping release tag."
+            exit 0
+          fi
+          next="${upstream_latest}+"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$next" >/dev/null 2>&1; then
+            echo "Tag $next already exists; skipping release tag."
+            exit 0
           fi
 
           git tag -a "$next" -m "$next"
