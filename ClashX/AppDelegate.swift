@@ -445,12 +445,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func syncConfigKeepingTunEnabledIfNeeded(_ shouldKeepTunEnabled: Bool) {
+        guard shouldKeepTunEnabled else {
+            syncConfigWithTun()
+            return
+        }
+
+        ApiRequest.updateTun(enable: true) { [weak self] in
+            self?.syncConfigWithTun()
+        }
+    }
+
     func resetStreamApi() {
         ApiRequest.shared.delegate = self
         ApiRequest.shared.resetStreamApis()
     }
 
     func updateConfig(configName: String? = nil, showNotification: Bool = true, completeHandler: ((ErrorString?) -> Void)? = nil) {
+        let shouldKeepTunEnabled = ConfigManager.shared.isTunModeVariable.value
 		startProxyCore()
         guard ConfigManager.shared.isRunning else { return }
 
@@ -469,7 +481,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if let err {
                 UpdateConfigAction.showError(text: err, configName: config)
             } else {
-                self.syncConfigWithTun()
+                self.syncConfigKeepingTunEnabledIfNeeded(shouldKeepTunEnabled)
                 self.resetStreamApi()
                 self.runAfterConfigReload?()
                 self.runAfterConfigReload = nil

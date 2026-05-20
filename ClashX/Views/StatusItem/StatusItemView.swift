@@ -94,10 +94,6 @@ final class StatusItemView: NSObject, StatusItemViewProtocol {
 
     func updateViewStatus(enableProxy: Bool) {
         self.enableProxy = enableProxy
-        let tint: NSColor = enableProxy
-            ? .labelColor
-            : NSColor.labelColor.withSystemEffect(.disabled)
-        statusItem?.button?.contentTintColor = tint
         renderTitle()
     }
 
