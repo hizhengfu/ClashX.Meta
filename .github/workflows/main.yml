@@ -67,6 +67,15 @@ jobs:
     - name: create zip
       run: ditto -c -k --sequesterRsrc --keepParent archive/ClashX.xcarchive/Products/Applications/ClashX\ Meta.app "ClashX Meta.zip"
 
+    - name: upload build to github
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        generate_release_notes: true
+        files: |
+          ClashX Meta.zip
 
     - name: upload Artifact
       uses: actions/upload-artifact@v4
@@ -75,15 +84,30 @@ jobs:
         name: "ClashX Meta.zip"
         path: "*.zip"
 
+    - name: check sparkle signing key
+      id: sparkle-key
+      if: startsWith(github.ref, 'refs/tags/')
+      env:
+        ED_KEY: ${{ secrets.ED_KEY }}
+      run: |
+        if [ -z "$ED_KEY" ]; then
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "ED_KEY is not configured; skipping Sparkle appcast update."
+        else
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: load sparkle-repo
       uses: actions/checkout@v4
-      if: startsWith(github.ref, 'refs/tags/')
+      if: startsWith(github.ref, 'refs/tags/') && steps.sparkle-key.outputs.enabled == 'true'
       with:
         ref: sparkle
         path: 'sparkle-repo'
 
     - name: update sparkle-repo
-      if: startsWith(github.ref, 'refs/tags/')
+      if: startsWith(github.ref, 'refs/tags/') && steps.sparkle-key.outputs.enabled == 'true'
+      env:
+        ED_KEY: ${{ secrets.ED_KEY }}
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email 'github-actions[bot]@users.noreply.github.com'
@@ -94,7 +118,7 @@ jobs:
         
         brew install sparkle
         sparkle_bin="$(find "$(brew --prefix)/Caskroom/sparkle" -path '*/bin/generate_appcast' -type f -print -quit)"
-        printf '%s' '${{ secrets.ED_KEY }}' | "$sparkle_bin" sparkle-repo --maximum-versions 1 --maximum-deltas 2 --auto-prune-update-files --ed-key-file -
+        printf '%s' "$ED_KEY" | "$sparkle_bin" sparkle-repo --maximum-versions 1 --maximum-deltas 2 --auto-prune-update-files --ed-key-file -
         
         cd sparkle-repo
         rm -rf old_updates
@@ -110,13 +134,3 @@ jobs:
         git branch -D temp-sparkle
 
         git push --force-with-lease origin sparkle
-
-    - name: upload build to github
-      uses: softprops/action-gh-release@v2
-      if: startsWith(github.ref, 'refs/tags/')
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        generate_release_notes: true
-        files: |
-          ClashX Meta.zip
