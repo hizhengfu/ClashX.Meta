@@ -60,9 +60,50 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+  sync-meta:
+    runs-on: ubuntu-latest
+    needs: resolve
+    outputs:
+      changed: ${{ steps.merge.outputs.changed }}
+      head_sha: ${{ steps.merge.outputs.head_sha }}
+
+    steps:
+      - name: Checkout meta
+        uses: actions/checkout@v4
+        with:
+          ref: meta
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Merge upstream meta
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/MetaCubeX/ClashX.Meta.git
+          git fetch upstream +refs/heads/meta:refs/remotes/upstream/meta --tags
+
+          if git merge-base --is-ancestor upstream/meta HEAD; then
+            changed=false
+            echo "This repository's meta branch already contains upstream/meta."
+          else
+            git merge --no-edit upstream/meta
+            git push origin HEAD:meta
+            changed=true
+            echo "Merged upstream/meta and pushed this repository's meta branch."
+          fi
+
+          {
+            echo "changed=$changed"
+            echo "head_sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
   build-release:
     runs-on: macos-26
-    needs: resolve
+    needs:
+      - resolve
+      - sync-meta
     if: needs.resolve.outputs.release_exists != 'true'
 
     steps:
@@ -74,7 +115,7 @@ jobs:
       - name: Checkout meta
         uses: actions/checkout@v4
         with:
-          ref: meta
+          ref: ${{ needs.sync-meta.outputs.head_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -148,10 +189,11 @@ jobs:
         with:
           tag_name: ${{ needs.resolve.outputs.release_tag }}
           name: ${{ needs.resolve.outputs.release_tag }}
-          target_commitish: ${{ github.sha }}
+          target_commitish: ${{ needs.sync-meta.outputs.head_sha }}
           body: |
             Built from upstream MetaCubeX/ClashX.Meta ${{ needs.resolve.outputs.upstream_tag }}.
             Core: MetaCubeX/mihomo ${{ needs.resolve.outputs.core_tag }}.
+            Fork commit: ${{ needs.sync-meta.outputs.head_sha }}.
             Version string: ${{ needs.resolve.outputs.release_tag }}
           files: |
             ClashX Meta.zip
