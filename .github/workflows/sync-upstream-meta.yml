@@ -6,68 +6,141 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: sync-upstream-meta
   cancel-in-progress: false
 
 jobs:
-  sync:
+  resolve:
     runs-on: ubuntu-latest
+    outputs:
+      upstream_tag: ${{ steps.upstream.outputs.upstream_tag }}
+      core_tag: ${{ steps.upstream.outputs.core_tag }}
+      release_tag: ${{ steps.upstream.outputs.release_tag }}
+      release_exists: ${{ steps.release.outputs.exists }}
 
     steps:
-      - name: Check release token
-        env:
-          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
-        run: test -n "$RELEASE_PAT"
+      - name: Resolve upstream version
+        id: upstream
+        run: |
+          upstream_tag="$(git ls-remote --tags --refs https://github.com/MetaCubeX/ClashX.Meta.git 'v*' | awk '{print $2}' | sed 's#refs/tags/##' | sort -V | tail -n1)"
+          if [ -z "$upstream_tag" ]; then
+            echo "No upstream version tag found."
+            exit 1
+          fi
 
-      - name: Checkout meta
+          core_tag="$(git ls-remote --tags --refs https://github.com/MetaCubeX/mihomo.git 'v*' | awk '{print $2}' | sed 's#refs/tags/##' | sort -V | tail -n1)"
+          if [ -z "$core_tag" ]; then
+            echo "No mihomo version tag found."
+            exit 1
+          fi
+
+          release_tag="${upstream_tag}+"
+          {
+            echo "upstream_tag=$upstream_tag"
+            echo "core_tag=$core_tag"
+            echo "release_tag=$release_tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "Upstream tag: $upstream_tag"
+          echo "Core tag: $core_tag"
+          echo "Release tag: $release_tag"
+
+      - name: Check existing release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.upstream.outputs.release_tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $RELEASE_TAG already exists; skipping build."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-release:
+    runs-on: macos-26
+    needs: resolve
+    if: needs.resolve.outputs.release_exists != 'true'
+
+    steps:
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Checkout upstream meta
         uses: actions/checkout@v4
         with:
+          repository: MetaCubeX/ClashX.Meta
           ref: meta
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_PAT }}
+          persist-credentials: false
 
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Download meta core
+        uses: robinraju/release-downloader@v1.12
+        with:
+          repository: MetaCubeX/mihomo
+          tag: ${{ needs.resolve.outputs.core_tag }}
+          fileName: mihomo-darwin-???64-${{ needs.resolve.outputs.core_tag }}.gz
+          out-file-path: clash.meta
 
-      - name: Fetch upstream
+      - name: Build infos
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
         run: |
-          git remote add upstream https://github.com/MetaCubeX/ClashX.Meta.git
-          git fetch upstream +refs/heads/meta:refs/remotes/upstream/meta --no-tags
+          core_archive="$(find clash.meta -maxdepth 1 -type f -name '*.gz' -print -quit)"
+          if [ -z "$core_archive" ]; then
+            echo "No mihomo archive downloaded."
+            exit 1
+          fi
 
-      - name: Detect upstream changes
-        id: detect
-        run: |
-          if git merge-base --is-ancestor upstream/meta HEAD; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+          core_version="$(printf '%s\n' "$core_archive" | sed -ne 's/.*64-\(.*\).gz/\1/p')"
+          if build_number="$(git rev-list --count origin/master..origin/meta 2>/dev/null)"; then
+            :
           else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            build_number="$(git rev-list --count HEAD)"
           fi
 
-      - name: Merge upstream meta
-        if: steps.detect.outputs.changed == 'true'
+          /usr/libexec/PlistBuddy -c "Set CFBundleVersion $build_number" ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c "Set CFBundleShortVersionString $RELEASE_TAG" ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c "Add coreVersion string $core_version" ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c "Add gitBranch string upstream/meta" ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c "Add gitCommit string ${GITHUB_SHA::7}" ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c "Add buildTime string $(date +%Y-%m-%d\ %H:%M)" ClashX/Info.plist
+
+          /usr/libexec/PlistBuddy -c 'Print CFBundleVersion' ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print coreVersion' ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print gitBranch' ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print gitCommit' ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print buildTime' ClashX/Info.plist
+
+      - name: Install deps
         run: |
-          git merge --no-edit upstream/meta
-          git push origin HEAD:meta
+          bash install_dependency.sh
+          xcodebuild -resolvePackageDependencies -project ClashX.xcodeproj
 
-      - name: Create release tag
-        if: steps.detect.outputs.changed == 'true'
+      - name: Build
         run: |
-          upstream_latest="$(git ls-remote --tags --refs upstream 'v*' | awk '{print $2}' | sed 's#refs/tags/##' | sort -V | tail -n1)"
-          if [ -z "$upstream_latest" ]; then
-            echo "No upstream version tag found; skipping release tag."
-            exit 0
-          fi
-          next="${upstream_latest}+"
+          xcodebuild archive -project ClashX.xcodeproj -scheme ClashX\ Meta -archivePath archive/ClashX.xcarchive -showBuildTimingSummary -allowProvisioningUpdates
 
-          if git ls-remote --exit-code --tags origin "refs/tags/$next" >/dev/null 2>&1; then
-            echo "Tag $next already exists; skipping release tag."
-            exit 0
-          fi
+      - name: Create zip
+        run: ditto -c -k --sequesterRsrc --keepParent archive/ClashX.xcarchive/Products/Applications/ClashX\ Meta.app "ClashX Meta.zip"
 
-          git tag -a "$next" -m "$next"
-          git push origin "$next"
+      - name: Upload release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tag_name: ${{ needs.resolve.outputs.release_tag }}
+          name: ${{ needs.resolve.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          body: |
+            Built from upstream MetaCubeX/ClashX.Meta ${{ needs.resolve.outputs.upstream_tag }}.
+            Core: MetaCubeX/mihomo ${{ needs.resolve.outputs.core_tag }}.
+            Version string: ${{ needs.resolve.outputs.release_tag }}
+          files: |
+            ClashX Meta.zip

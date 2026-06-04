@@ -18,9 +18,10 @@ final class StatusItemView: NSObject, StatusItemViewProtocol {
     private var uploadSpeedText = "0KB/s"
     private var downloadSpeedText = "0KB/s"
 
-    static func create(statusItem: NSStatusItem?) -> StatusItemView {
+    @MainActor
+    static func create(statusItem: NSStatusItem?) async -> StatusItemView {
         let view = StatusItemView(statusItem: statusItem)
-        view.setupButton()
+        await view.setupButton()
         return view
     }
 
@@ -29,10 +30,11 @@ final class StatusItemView: NSObject, StatusItemViewProtocol {
         super.init()
     }
 
-    private func setupButton() {
+    @MainActor
+    private func setupButton() async {
         guard let button = statusItem?.button else {
             Logger.log("button = nil")
-            AppDelegate.shared.openConfigFolder(self)
+            await ConfigFileManager.shared.openConfigFolder()
             return
         }
 
@@ -92,6 +94,7 @@ final class StatusItemView: NSObject, StatusItemViewProtocol {
         statusItem?.length = width
     }
 
+    @MainActor
     func updateViewStatus(enableProxy: Bool) {
         self.enableProxy = enableProxy
         renderTitle()
