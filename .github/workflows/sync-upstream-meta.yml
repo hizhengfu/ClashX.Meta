@@ -71,13 +71,24 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Checkout upstream meta
+      - name: Checkout meta
         uses: actions/checkout@v4
         with:
-          repository: MetaCubeX/ClashX.Meta
           ref: meta
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify upstream version is merged
+        env:
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+        run: |
+          git fetch --no-tags https://github.com/MetaCubeX/ClashX.Meta.git "refs/tags/$UPSTREAM_TAG"
+          upstream_commit="$(git rev-parse "FETCH_HEAD^{commit}")"
+          if ! git merge-base --is-ancestor "$upstream_commit" HEAD; then
+            echo "Upstream $UPSTREAM_TAG is not merged into this repository's meta branch."
+            echo "Merge upstream meta first, then run this workflow again."
+            exit 1
+          fi
 
       - name: Download meta core
         uses: robinraju/release-downloader@v1.12
@@ -107,8 +118,8 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set CFBundleVersion $build_number" ClashX/Info.plist
           /usr/libexec/PlistBuddy -c "Set CFBundleShortVersionString $RELEASE_TAG" ClashX/Info.plist
           /usr/libexec/PlistBuddy -c "Add coreVersion string $core_version" ClashX/Info.plist
-          /usr/libexec/PlistBuddy -c "Add gitBranch string upstream/meta" ClashX/Info.plist
-          /usr/libexec/PlistBuddy -c "Add gitCommit string ${GITHUB_SHA::7}" ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c "Add gitBranch string meta" ClashX/Info.plist
+          /usr/libexec/PlistBuddy -c "Add gitCommit string $(git rev-parse --short HEAD)" ClashX/Info.plist
           /usr/libexec/PlistBuddy -c "Add buildTime string $(date +%Y-%m-%d\ %H:%M)" ClashX/Info.plist
 
           /usr/libexec/PlistBuddy -c 'Print CFBundleVersion' ClashX/Info.plist
